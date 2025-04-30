@@ -8,7 +8,9 @@
   <style>
     body, html { margin:0; padding:0; height:100%; overflow:hidden; font-family:'Google Sans',sans-serif; background:#f0f0f0; }
     #toolbar { position:absolute; top:0; right:0; width:160px; height:100%; background:#d0cfc9; border-left:1px solid #ccc; padding:12px; display:flex; flex-direction:column; gap:12px; box-shadow:-2px 0 8px rgba(0,0,0,0.1); z-index:10; }
-    #canvasContainer { position:absolute; top:0; left:0; right:160px; bottom:0; }
+    #canvasContainer { position:absolute; top:0; left:0; right:160px; bottom:0; cursor: crosshair; }
+    #canvasContainer.panning { cursor: grab; }
+    #canvasContainer.panning:active { cursor: grabbing; }
     .section { background:#fff; padding:8px; border:1px dashed #bbb; border-radius:6px; display:flex; flex-direction:column; gap:6px; }
     label { font-size:0.76em; font-weight:500; color:#555; text-align:center; }
     .picker-group { display:flex; gap:8px; }
@@ -63,11 +65,10 @@
     </div>
     <button id="exportBtn">💾 Exportar PNG</button>
     <div class="footer">
-      <strong>Atalhos:</strong><br>B = pincel<br>E = borracha<br>+ / - = tamanho
+      <strong>Atalhos:</strong><br>B = pincel<br>E = borracha<br>Option+/ = espelhar<br>Segurar Espaço + arrastar = navegar
     </div>
   </div>
   <script>
-    // Elementos
     const container = document.getElementById('canvasContainer');
     const colorPicker = document.getElementById('colorPicker');
     const bgColorPicker = document.getElementById('bgColorPicker');
@@ -82,13 +83,13 @@
     const strokeHistoryDiv = document.getElementById('strokeHistory');
     const bgHistoryDiv = document.getElementById('bgHistory');
 
-    // Variáveis
-    let bgCanvas, bgCtx;
+    let wrapper, bgCanvas, bgCtx;
     let layers = [], activeLayer = null;
     let strokeHistory = [], bgHistory = [];
     let tool = 'brush';
+    let drawing = false, lastPt = null;
+    let isPanning = false, panStart = {x:0,y:0}, scrollStart = {x:0,y:0}, spacePressed = false;
 
-    // Utility: escurece cor
     function darkenColor(hex, amt) {
       if (hex.startsWith('#')) hex = hex.slice(1);
       let num = parseInt(hex,16);
@@ -97,18 +98,27 @@
       return '#' + ((r<<16)|(g<<8)|b).toString(16).padStart(6,'0');
     }
 
-    // Inicializa fundo
-    function initBackground() {
-      bgCanvas = document.createElement('canvas');
-      bgCanvas.width = container.clientWidth;
-      bgCanvas.height = container.clientHeight;
-      Object.assign(bgCanvas.style,{position:'absolute',top:0,left:0,zIndex:0});
-      container.appendChild(bgCanvas);
-      bgCtx = bgCanvas.getContext('2d');
-      updateBackground(bgColorPicker.value);
+    function initCanvasArea() {
+      wrapper = document.createElement('div');
+      wrapper.style.position = 'relative';
+      wrapper.style.width = "200%";
+      wrapper.style.height = "200%";
+      container.style.overflow = 'auto';
+      container.appendChild(wrapper);
     }
 
-    // Atualiza fundo e histórico BG
+    function initBackground() {
+      bgCanvas = document.createElement('canvas');
+      bgCanvas.width = wrapper.clientWidth;
+      bgCanvas.height = wrapper.clientHeight;
+      Object.assign(bgCanvas.style,{position:'absolute',top:0,left:0,zIndex:0});
+      wrapper.appendChild(bgCanvas);
+      bgCtx = bgCanvas.getContext('2d');
+      updateBackground(bgColorPicker.value);
+      container.scrollLeft = (bgCanvas.width - container.clientWidth) / 2;
+      container.scrollTop = (bgCanvas.height - container.clientHeight) / 2;
+    }
+
     function updateBackground(color) {
       bgCtx.fillStyle = color;
       bgCtx.fillRect(0,0,bgCanvas.width,bgCanvas.height);
@@ -118,56 +128,102 @@
       document.getElementById('toolbar').style.background = darkenColor(color,0.2);
     }
 
-    // Renderiza histórico de cores
     function renderHistory() {
       strokeHistoryDiv.innerHTML=''; bgHistoryDiv.innerHTML='';
-      strokeHistory.forEach(c=>{const s=document.createElement('div');s.className='swatch';s.style.background=c;s.onclick=()=>colorPicker.value=c;strokeHistoryDiv.appendChild(s);});
-      bgHistory.forEach(c=>{const s=document.createElement('div');s.className='swatch';s.style.background=c;s.onclick=()=>updateBackground(c);bgHistoryDiv.appendChild(s);});
+      strokeHistory.forEach(c=>{const s=document.createElement('div');s.className='swatch';s.style.background=c; s.onclick=()=>colorPicker.value=c; strokeHistoryDiv.appendChild(s);});
+      bgHistory.forEach(c=>{const s=document.createElement('div');s.className='swatch';s.style.background=c; s.onclick=()=>updateBackground(c); bgHistoryDiv.appendChild(s);});
     }
 
-    // Camadas
     function renderLayers() {
       layersDiv.innerHTML='';
       layers.slice().reverse().forEach(layer=>{
-        const item=document.createElement('div');item.className='layer-item';
-        const chk=document.createElement('input');chk.type='checkbox';chk.checked=layer.visible;
-        chk.onchange=()=>{layer.visible=chk.checked;layer.canvas.style.display=chk.checked?'block':'none';};item.append(chk);
-        const name=document.createElement('span');name.textContent=layer.name;name.onclick=()=>activeLayer=layer;item.append(name);
-        const del=document.createElement('button');del.textContent='✕';del.onclick=()=>{const i=layers.indexOf(layer);if(i>-1){container.removeChild(layer.canvas);layers.splice(i,1);renderLayers();activeLayer=layers[layers.length-1]||null;}};item.append(del);
+        const item=document.createElement('div'); item.className='layer-item';
+        const chk=document.createElement('input'); chk.type='checkbox'; chk.checked=layer.visible;
+        chk.onchange=()=>{layer.visible=chk.checked; layer.canvas.style.display=chk.checked?'block':'none';}; item.append(chk);
+        const name=document.createElement('span'); name.textContent=layer.name; name.onclick=()=>activeLayer=layer; item.append(name);
+        const del=document.createElement('button'); del.textContent='✕';
+        del.onclick=()=>{const i=layers.indexOf(layer); if(i>-1){wrapper.removeChild(layer.canvas); layers.splice(i,1); activeLayer=layers[layers.length-1]||null; renderLayers(); }}; item.append(del);
         layersDiv.append(item);
       });
     }
 
     function createLayer(name) {
       const c=document.createElement('canvas');
-      c.width=container.clientWidth; c.height=container.clientHeight;
+      c.width=wrapper.clientWidth; c.height=wrapper.clientHeight;
       Object.assign(c.style,{position:'absolute',top:'0',left:'0',zIndex:layers.length+1});
-      container.append(c);
-      const ctx=c.getContext('2d');ctx.lineCap='round';ctx.lineJoin='round';
+      wrapper.appendChild(c);
+      const ctx=c.getContext('2d'); ctx.lineCap='round'; ctx.lineJoin='round';
       const layer={canvas:c,ctx,name,history:[],historyIndex:-1,visible:true};
-      layers.push(layer);activeLayer=layer;renderLayers();
+      layers.push(layer); activeLayer=layer; renderLayers();
     }
 
-    // Histórico de operação para undo
-    function saveHistory(){if(!activeLayer)return;const img=activeLayer.ctx.getImageData(0,0,activeLayer.canvas.width,activeLayer.canvas.height);activeLayer.history.splice(activeLayer.historyIndex+1);activeLayer.history.push(img);activeLayer.historyIndex++;if(activeLayer.history.length>50)activeLayer.history.shift(),activeLayer.historyIndex--;}
-    function undo(){if(!activeLayer)return;if(activeLayer.historyIndex>0){activeLayer.historyIndex--;activeLayer.ctx.putImageData(activeLayer.history[activeLayer.historyIndex],0,0);}else if(activeLayer.historyIndex===0){activeLayer.historyIndex--;activeLayer.ctx.clearRect(0,0,activeLayer.canvas.width,activeLayer.canvas.height);}}
+    function saveHistory(){ if(!activeLayer) return; const img=activeLayer.ctx.getImageData(0,0,activeLayer.canvas.width,activeLayer.canvas.height);
+      activeLayer.history.splice(activeLayer.historyIndex+1); activeLayer.history.push(img);
+      activeLayer.historyIndex++;
+      if(activeLayer.history.length>50) activeLayer.history.shift(), activeLayer.historyIndex--;
+    }
 
-    // Desenho com pressão
-    let drawing=false,lastPt=null;
-    function pointerDown(e){if(!activeLayer)return;drawing=true;lastPt={x:e.offsetX,y:e.offsetY,pressure:e.pressure||0.5};saveHistory();}
-    function pointerMove(e){if(!drawing||!activeLayer)return;const p={x:e.offsetX,y:e.offsetY,pressure:e.pressure||0.5};const ctx=activeLayer.ctx;ctx.globalCompositeOperation=(tool==='eraser')?'destination-out':'source-over';if(tool==='brush')ctx.strokeStyle=colorPicker.value;ctx.globalAlpha=(tool==='brush')?parseFloat(brushOpacityRange.value):parseFloat(eraserOpacityRange.value);const size=((tool==='brush')?parseFloat(brushSizeRange.value):parseFloat(eraserSizeRange.value))*p.pressure;ctx.lineWidth=size;if(brushStyle.value==='dotted')ctx.setLineDash([size,size*1.5]);else ctx.setLineDash([]);let x1=lastPt.x,y1=lastPt.y,x2=p.x,y2=p.y;if(brushStyle.value==='jitter'){const j=size*0.3;x1+=(Math.random()-0.5)*j;y1+=(Math.random()-0.5)*j;x2+=(Math.random()-0.5)*j;y2+=(Math.random()-0.5)*j;}ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();lastPt=p;}
-    function pointerUp(){drawing=false;lastPt=null;}
+    function undo(){ if(!activeLayer) return; if(activeLayer.historyIndex>0){ activeLayer.historyIndex--; activeLayer.ctx.putImageData(activeLayer.history[activeLayer.historyIndex],0,0);} 
+      else if(activeLayer.historyIndex===0){ activeLayer.historyIndex--; activeLayer.ctx.clearRect(0,0,activeLayer.canvas.width,activeLayer.canvas.height);} }
 
-    // Eventos de UI
-    colorPicker.addEventListener('change',e=>{const c=e.target.value; if(!strokeHistory.includes(c))strokeHistory.unshift(c);if(strokeHistory.length>8)strokeHistory.pop();renderHistory();});
+    function getPointerPos(e) {
+      const rect = container.getBoundingClientRect();
+      return { x: e.clientX - rect.left + container.scrollLeft, y: e.clientY - rect.top + container.scrollTop, pressure: e.pressure||0.5 };
+    }
+
+    function pointerDown(e) {
+      if(spacePressed){ isPanning=true; panStart={x:e.clientX,y:e.clientY}; scrollStart={x:container.scrollLeft,y:container.scrollTop}; container.classList.add('panning'); return; }
+      if(!activeLayer) return;
+      drawing=true; lastPt=getPointerPos(e); saveHistory();
+    }
+
+    function pointerMove(e) {
+      if(isPanning){ const dx=e.clientX-panStart.x, dy=e.clientY-panStart.y; container.scrollLeft=scrollStart.x-dx; container.scrollTop=scrollStart.y-dy; return; }
+      if(!drawing||!activeLayer) return;
+      const p=getPointerPos(e), ctx=activeLayer.ctx;
+      ctx.globalCompositeOperation=(tool==='eraser')?'destination-out':'source-over';
+      if(tool==='brush') ctx.strokeStyle=colorPicker.value;
+      ctx.globalAlpha=(tool==='brush')?parseFloat(brushOpacityRange.value):parseFloat(eraserOpacityRange.value);
+      const size=((tool==='brush')?parseFloat(brushSizeRange.value):parseFloat(eraserSizeRange.value))*p.pressure;
+      ctx.lineWidth=size;
+      if(brushStyle.value==='dotted') ctx.setLineDash([size,size*1.5]); else ctx.setLineDash([]);
+      let x1=lastPt.x,y1=lastPt.y,x2=p.x,y2=p.y;
+      if(brushStyle.value==='jitter'){ const j=size*0.3; x1+=(Math.random()-0.5)*j; y1+=(Math.random()-0.5)*j; x2+=(Math.random()-0.5)*j; y2+=(Math.random()-0.5)*j; }
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); lastPt=p;
+    }
+
+    function pointerUp(e) {
+      if(isPanning){ isPanning=false; container.classList.remove('panning'); return; }
+      drawing=false; lastPt=null;
+    }
+
+    function mirrorAllLayers(){ layers.forEach(layer=>{ const canvas=layer.canvas, ctx=layer.ctx, w=canvas.width, h=canvas.height;
+        const temp=document.createElement('canvas'); temp.width=w; temp.height=h; temp.getContext('2d').drawImage(canvas,0,0);
+        ctx.clearRect(0,0,w,h); ctx.save(); ctx.scale(-1,1); ctx.drawImage(temp,-w,0); ctx.restore(); }); }
+
+    colorPicker.addEventListener('change',e=>{ const c=e.target.value; if(!strokeHistory.includes(c)) strokeHistory.unshift(c); if(strokeHistory.length>8) strokeHistory.pop(); renderHistory(); });
     bgColorPicker.addEventListener('change',e=>updateBackground(e.target.value));
     addLayerBtn.onclick=()=>createLayer(`cam ${layers.length+1}`);
-    exportBtn.onclick=()=>{const ex=document.createElement('canvas');ex.width=bgCanvas.width;ex.height=bgCanvas.height;const exCtx=ex.getContext('2d');exCtx.drawImage(bgCanvas,0,0);layers.forEach(l=>{if(l.visible)exCtx.drawImage(l.canvas,0,0);});const link=document.createElement('a');link.download='drawing.png';link.href=ex.toDataURL('image/png');link.click();};
-    window.addEventListener('keydown',e=>{if(e.key==='b')tool='brush';else if(e.key==='e')tool='eraser';else if(e.altKey&&(e.key==='+'||e.key==='=')){if(tool==='brush')brushSizeRange.value=Math.min(+brushSizeRange.max,+brushSizeRange.value+1);else eraserSizeRange.value=Math.min(+eraserSizeRange.max,+eraserSizeRange.value+1);}else if(e.altKey&&e.key==='-'){if(tool==='brush')brushSizeRange.value=Math.max(+brushSizeRange.min,+brushSizeRange.value-1);else eraserSizeRange.value=Math.max(+eraserSizeRange.min,+eraserSizeRange.value-1);}else if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo();}});
-    window.addEventListener('resize',()=>{bgCanvas.width=container.clientWidth;bgCanvas.height=container.clientHeight;updateBackground(bgColorPicker.value);layers.forEach(l=>{const img=l.ctx.getImageData(0,0,l.canvas.width,l.canvas.height);l.canvas.width=container.clientWidth;l.canvas.height=container.clientHeight;l.ctx.putImageData(img,0,0);});});
+    exportBtn.onclick=()=>{ const ex=document.createElement('canvas'); ex.width=wrapper.clientWidth; ex.height=wrapper.clientHeight;
+      const exCtx=ex.getContext('2d'); exCtx.drawImage(bgCanvas,0,0);
+      layers.forEach(l=>{ if(l.visible) exCtx.drawImage(l.canvas,0,0); });
+      const link=document.createElement('a'); link.download='drawing.png'; link.href=ex.toDataURL('image/png'); link.click(); };
 
-    // Inicialização
-    initBackground(); strokeHistory.unshift(colorPicker.value); renderHistory(); createLayer('cam 1');
+    window.addEventListener('keydown',e=>{
+      if(e.code==='Space'){ e.preventDefault(); spacePressed=true; }
+      else if(e.altKey&&e.key==='/' ){ mirrorAllLayers(); }
+      else if(e.key==='b'){ tool='brush'; }
+      else if(e.key==='e'){ tool='eraser'; }
+      else if(e.altKey&&(e.key==='+'||e.key==='=')){ if(tool==='brush') brushSizeRange.value=Math.min(+brushSizeRange.max,+brushSizeRange.value+1); else eraserSizeRange.value=Math.min(+eraserSizeRange.max,+eraserSizeRange.value+1); }
+      else if(e.altKey&&e.key==='-'){ if(tool==='brush') brushSizeRange.value=Math.max(+brushSizeRange.min,+brushSizeRange.value-1); else eraserSizeRange.value=Math.max(+eraserSizeRange.min,+eraserOpacityRange.value-1); }
+      else if((e.ctrlKey||e.metaKey)&&e.key==='z'){ e.preventDefault(); undo(); }
+    });
+
+    window.addEventListener('keyup',e=>{ if(e.code==='Space') spacePressed=false; });
+
+    window.addEventListener('resize',()=>{ /* opcional: recalc wrapper/client dims se necessário */ });
+
+    initCanvasArea(); initBackground(); strokeHistory.unshift(colorPicker.value); renderHistory(); createLayer('cam 1');
     container.addEventListener('pointerdown',pointerDown);
     container.addEventListener('pointermove',pointerMove);
     container.addEventListener('pointerup',pointerUp);
