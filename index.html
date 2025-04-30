@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canvas Drawing App</title>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: 'Google Sans', sans-serif; }
+    #toolbar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 192px;
+      height: 100%;
+      background: #d0cfc9; /* 20% darker than #e8e6e1 */
+      border-right: 1px solid #ccc;
+      box-sizing: border-box;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      color: #333;
+    }
+    #canvasContainer {
+      position: absolute;
+      top: 0;
+      left: 192px;
+      right: 0;
+      bottom: 0;
+      touch-action: none;
+    }
+    .section {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px;
+      border: 1px dashed #888;
+    }
+    label { font-size: 0.95em; margin-bottom: 4px; font-weight: 500; }
+    .picker-group { display: flex; gap: 8px; }
+    .picker-group > div { flex: 1; display: flex; flex-direction: column; }
+    input[type="color"] { -webkit-appearance: none; border: none; width: 100%; height: 32px; cursor: pointer; }
+    input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; border-radius: 4px; }
+    input[type="color"]::-webkit-color-swatch { border: 1px solid #888; border-radius: 4px; }
+    input[type="range"], select, button { width: 100%; }
+    .swatch-container { display: flex; gap: 4px; flex-wrap: wrap; }
+    .swatch { width: 24px; height: 24px; border: 1px solid #888; cursor: pointer; }
+    .footer { margin-top: auto; font-size: 0.8em; line-height: 1.4em; text-align: left; }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <div class="picker-group section">
+      <div>
+        <label>Pincel</label>
+        <input type="color" id="colorPicker" value="#3a93c0">
+      </div>
+      <div>
+        <label>BG</label>
+        <input type="color" id="bgColorPicker" value="#e8e6e1">
+      </div>
+    </div>
+
+    <div class="swatch-container" id="strokeHistory"></div>
+    <div class="swatch-container" id="bgHistory"></div>
+
+    <div class="section">
+      <label>Pincel</label>
+      <label>Tamanho</label>
+      <input type="range" id="brushSizeRange" min="1" max="100" value="4">
+      <label>Opacidade</label>
+      <input type="range" id="brushOpacityRange" min="0" max="1" step="0.01" value="0.2">
+    </div>
+
+    <div class="section">
+      <label>Borracha</label>
+      <label>Tamanho</label>
+      <input type="range" id="eraserSizeRange" min="1" max="100" value="20">
+      <label>Opacidade</label>
+      <input type="range" id="eraserOpacityRange" min="0" max="1" step="0.01" value="0.6">
+    </div>
+
+    <div class="section">
+      <label>Estilo ponta</label>
+      <select id="brushStyle">
+        <option value="jitter">Jitter</option>
+        <option value="normal">Normal</option>
+        <option value="dotted">Pontilhado</option>
+      </select>
+    </div>
+
+    <div class="section">
+      <input type="checkbox" id="layerToggle" checked>
+      <label for="layerToggle" id="layerLabel">Camada 1</label>
+      <button id="addLayer">+ nova camada</button>
+    </div>
+
+    <div class="footer">
+      Atalhos:<br>
+      B = pincel<br>
+      E = borracha<br>
+      + / - = tamanho
+    </div>
+  </div>
+
+  <div id="canvasContainer"></div>
+
+  <script>
+    const container = document.getElementById('canvasContainer');
+    const colorPicker = document.getElementById('colorPicker');
+    const bgColorPicker = document.getElementById('bgColorPicker');
+    const brushSizeRange = document.getElementById('brushSizeRange');
+    const brushOpacityRange = document.getElementById('brushOpacityRange');
+    const eraserSizeRange = document.getElementById('eraserSizeRange');
+    const eraserOpacityRange = document.getElementById('eraserOpacityRange');
+    const brushStyle = document.getElementById('brushStyle');
+    const addLayerBtn = document.getElementById('addLayer');
+    const layerToggle = document.getElementById('layerToggle');
+    const layerLabel = document.getElementById('layerLabel');
+    const strokeHistoryDiv = document.getElementById('strokeHistory');
+    const bgHistoryDiv = document.getElementById('bgHistory');
+
+    let bgCanvas, bgCtx;
+    let layers = [], activeLayer = null;
+    let strokeHistory = [], bgHistory = [];
+    let tool = 'brush';
+
+    function darkenColor(hex, amt) {
+      let usePound = false;
+      if (hex[0] === '#') { hex = hex.slice(1); usePound = true; }
+      let num = parseInt(hex,16);
+      let r = (num>>16)&0xFF, g = (num>>8)&0xFF, b = num&0xFF;
+      r = Math.max(0, Math.min(255, r*(1-amt)));
+      g = Math.max(0, Math.min(255, g*(1-amt)));
+      b = Math.max(0, Math.min(255, b*(1-amt)));
+      const res = ((r<<16)|(g<<8)|b).toString(16).padStart(6,'0');
+      return (usePound?'#':'') + res;
+    }
+
+    function initBackground() {
+      bgCanvas = document.createElement('canvas');
+      bgCanvas.width = container.clientWidth;
+      bgCanvas.height = container.clientHeight;
+      bgCanvas.style.position = 'absolute'; bgCanvas.style.top = 0; bgCanvas.style.left = 0; bgCanvas.style.zIndex = 0;
+      container.appendChild(bgCanvas);
+      bgCtx = bgCanvas.getContext('2d');
+      updateBackground(bgColorPicker.value);
+    }
+
+    function updateBackground(color) {
+      bgCtx.fillStyle = color;
+      bgCtx.fillRect(0,0,bgCanvas.width,bgCanvas.height);
+      const darker = darkenColor(color,0.2);
+      document.getElementById('toolbar').style.background = darker;
+      addToBgHistory(color);
+    }
+
+    function addToStrokeHistory(color) {
+      if (!strokeHistory.includes(color)) strokeHistory.unshift(color);
+      if (strokeHistory.length>8) strokeHistory.pop(); renderHistory();
+    }
+    function addToBgHistory(color) {
+      if (!bgHistory.includes(color)) bgHistory.unshift(color);
+      if (bgHistory.length>8) bgHistory.pop(); renderHistory();
+    }
+    function renderHistory() {
+      strokeHistoryDiv.innerHTML='';
+      strokeHistory.forEach(col=>{ const sw=document.createElement('div'); sw.className='swatch'; sw.style.background=col; sw.onclick=()=>colorPicker.value=col; strokeHistoryDiv.appendChild(sw); });
+      bgHistoryDiv.innerHTML='';
+      bgHistory.forEach(col=>{ const sw=document.createElement('div'); sw.className='swatch'; sw.style.background=col; sw.onclick=()=>{bgColorPicker.value=col;updateBackground(col);} ; bgHistoryDiv.appendChild(sw); });
+    }
+
+    function createLayer(name) {
+      const canvas=document.createElement('canvas');
+      canvas.width=container.clientWidth; canvas.height=container.clientHeight;
+      canvas.style.position='absolute'; canvas.style.top=0; canvas.style.left=0;
+      canvas.style.zIndex=layers.length+1;
+      container.appendChild(canvas);
+      const ctx=canvas.getContext('2d'); ctx.lineCap='round'; ctx.lineJoin='round';
+      const layer={canvas,ctx,name,history:[],historyIndex:-1,visible:true};
+      layers.push(layer);
+      activeLayer=layer;
+      layerLabel.textContent=name;
+      layerToggle.checked=true;
+      layerToggle.onchange = ()=>{
+        layer.visible=layerToggle.checked;
+        layer.canvas.style.display=layerToggle.checked?'block':'none';
+      };
+      return layer;
+    }
+
+    addLayerBtn.onclick = ()=>{
+      const newName = `Camada ${layers.length+1}`;
+      createLayer(newName);
+    };
+
+    function saveHistory() {
+      if (!activeLayer) return;
+      const data=activeLayer.ctx.getImageData(0,0,activeLayer.canvas.width,activeLayer.canvas.height);
+      activeLayer.history.splice(activeLayer.historyIndex+1);
+      activeLayer.history.push(data);
+      activeLayer.historyIndex++;
+      if(activeLayer.history.length>50)activeLayer.history.shift(),activeLayer.historyIndex--;
+    }
+    function undo() {
+      if(!activeLayer)return;
+      if(activeLayer.historyIndex>0){activeLayer.historyIndex--; activeLayer.ctx.putImageData(activeLayer.history[activeLayer.historyIndex],0,0);} 
+      else if(activeLayer.historyIndex===0){activeLayer.historyIndex--; activeLayer.ctx.clearRect(0,0,activeLayer.canvas.width,activeLayer.canvas.height);}    
+    }
+
+    let drawing=false, lastPoint=null;
+    function pointerDown(e){if(!activeLayer)return; drawing=true; lastPoint={x:e.offsetX,y:e.offsetY,pressure:e.pressure||0.5}; saveHistory(); if(tool==='brush') addToStrokeHistory(colorPicker.value);}    
+    function pointerMove(e){if(!drawing||!activeLayer)return; const p={x:e.offsetX,y:e.offsetY,pressure:e.pressure||0.5}; const ctx=activeLayer.ctx;
+      ctx.globalCompositeOperation=(tool==='eraser')?'destination-out':'source-over';
+      if(tool==='brush')ctx.strokeStyle=colorPicker.value;
+      ctx.globalAlpha=(tool==='brush')?parseFloat(brushOpacityRange.value):parseFloat(eraserOpacityRange.value);
+      const size=(tool==='brush'?parseFloat(brushSizeRange.value)*p.pressure:parseFloat(eraserSizeRange.value)*p.pressure);
+      ctx.lineWidth=size;
+      if(brushStyle.value==='dotted')ctx.setLineDash([size,size*1.5]);else ctx.setLineDash([]);
+      let x1=lastPoint.x,y1=lastPoint.y,x2=p.x,y2=p.y;
+      if(brushStyle.value==='jitter'){const j=size*0.3; x1+=(Math.random()-0.5)*j; y1+=(Math.random()-0.5)*j; x2+=(Math.random()-0.5)*j; y2+=(Math.random()-0.5)*j;}      
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke(); lastPoint=p;}    
+    function pointerUp(){drawing=false;lastPoint=null;}    
+    window.addEventListener('keydown',e=>{if(e.key.toLowerCase()==='b'){tool='brush';}else if(e.key.toLowerCase()==='e'){tool='eraser';}else if(e.altKey&&(e.key==='+'||e.key==='=')){if(tool==='brush'){brushSizeRange.value=Math.min(+brushSizeRange.max,+brushSizeRange.value+1);}else{eraserSizeRange.value=Math.min(+eraserSizeRange.max,+eraserSizeRange.value+1);}}else if(e.altKey&&e.key==='-'){if(tool==='brush'){brushSizeRange.value=Math.max(+brushSizeRange.min,+brushSizeRange.value-1);}else{eraserSizeRange.value=Math.max(+eraserSizeRange.min,+eraserSizeRange.value-1);}}else if((e.metaKey||e.ctrlKey)&&e.key==='z'){e.preventDefault();undo();}});
+
+    initBackground(); createLayer('Camada 1');
+    container.addEventListener('pointerdown',pointerDown);
+    container.addEventListener('pointermove',pointerMove);
+    container.addEventListener('pointerup',pointerUp);
+    container.addEventListener('pointerleave',pointerUp);
+    window.addEventListener('resize',()=>{bgCanvas.width=container.clientWidth;bgCanvas.height=container.clientHeight;updateBackground(bgColorPicker.value);layers.forEach(layer=>{const img=layer.ctx.getImageData(0,0,layer.canvas.width,layer.canvas.height);layer.canvas.width=container.clientWidth;layer.canvas.height=container.clientHeight;layer.ctx.putImageData(img,0,0);});});
+    bgColorPicker.addEventListener('change',e=>updateBackground(e.target.value));
+  </script>
+</body>
+</html>
