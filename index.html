@@ -12,8 +12,8 @@
     #iconToolbar { position:absolute; top:0; left:0; bottom:0; width:48px; background:#2b2b2b; display:flex; flex-direction:column; align-items:center; padding:8px 0; gap:12px; box-shadow:2px 0 8px rgba(0,0,0,0.4); z-index:20; }
     #iconToolbar button { width:32px; height:32px; background:none; border:none; color:#ccc; cursor:pointer; }
     #iconToolbar button:hover { background:rgba(255,255,255,0.1); border-radius:4px; }
-    /* Properties bar */
-    #propBar { position:absolute; top:0; left:48px; right:0; height:48px; background:#333; display:flex; align-items:center; gap:12px; padding:4px 12px; z-index:20; }
+    /* Properties bar hidden by default */
+    #propBar { position:absolute; top:0; left:48px; right:0; height:48px; background:#333; display:none; align-items:center; gap:12px; padding:4px 12px; z-index:20; }
     #propBar label { color:#eee; font-size:0.85em; margin:0 4px; }
     #propBar input, #propBar select { background:#494949; border:1px solid #555; border-radius:4px; color:#eee; font-size:0.85em; padding:2px; }
     #pencilHardness { display:none; }
@@ -85,7 +85,7 @@
       <li><strong>H</strong>: Mostrar/Ocultar Ajuda</li>
       <li><strong>Space</strong>+arrastar: Pan</li>
       <li><strong>⌘+B</strong>: Espelhar</li>
-      <li><strong>⌘/Ctrl+Z</strong>: Desfazer</li>
+      <li><strong>⌘+Z</strong>: Desfazer | <strong>⌘+Shift+Z</strong>: Refazer</li>
     </ul>
   </div>
 
@@ -106,7 +106,7 @@
     const pencilHardness = document.getElementById('pencilHardness');
     const addLayerBtn = document.getElementById('addLayer');
 
-    // Initialize state variables
+    // State variables
     let bgCanvas, bgCtx;
     let layers = [];
     let activeLayer = null;
@@ -114,184 +114,92 @@
     let drawing = false;
     let points = [];
     let panX = 0, panY = 0, isPanning = false, isSpace = false;
-    let panStart = { x: 0, y: 0 }, startPan = { x: 0, y: 0 };
+    let panStart = { x:0, y:0 }, startPan = { x:0, y:0 };
 
     // Hidden pickers
     const colorPicker = document.createElement('input'); colorPicker.type='color'; colorPicker.value='#3a93c0';
     const bgColorPicker = document.createElement('input'); bgColorPicker.type='color'; bgColorPicker.value='#e8e6e1';
     propBar.append(colorPicker, bgColorPicker);
 
-    // History arrays
+    // History
     let strokeHistory = [];
     let bgHistory = [];
 
-    // Utility: darken color
+    // Darken helper
     function darkenColor(hex, amt) {
       if (hex.startsWith('#')) hex = hex.slice(1);
-      let num = parseInt(hex, 16);
-      let r = (num >> 16) & 255, g = (num >> 8) & 255, b = num & 255;
-      r = Math.round(r * (1 - amt)); g = Math.round(g * (1 - amt)); b = Math.round(b * (1 - amt));
-      return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
+      let num = parseInt(hex,16), r=(num>>16)&255, g=(num>>8)&255, b=num&255;
+      r=Math.round(r*(1-amt));g=Math.round(g*(1-amt));b=Math.round(b*(1-amt));
+      return '#'+((r<<16)|(g<<8)|b).toString(16).padStart(6,'0');
     }
 
-    // Initialize background canvas
+    // Background init
     function initBackground() {
-      const w = container.clientWidth * 3;
-      const h = container.clientHeight * 3;
-      wrapper.style.width = w + 'px'; wrapper.style.height = h + 'px';
-      bgCanvas = document.createElement('canvas'); bgCanvas.width = w; bgCanvas.height = h;
-      Object.assign(bgCanvas.style, { position:'absolute', top:`-${container.clientHeight}px`, left:`-${container.clientWidth}px`, zIndex:0 });
+      const w = container.clientWidth*3, h = container.clientHeight*3;
+      wrapper.style.width=w+'px'; wrapper.style.height=h+'px';
+      bgCanvas=document.createElement('canvas'); bgCanvas.width=w; bgCanvas.height=h;
+      Object.assign(bgCanvas.style,{position:'absolute',top:`-${container.clientHeight}px`,left:`-${container.clientWidth}px`,zIndex:0});
       wrapper.appendChild(bgCanvas);
-      bgCtx = bgCanvas.getContext('2d'); updateBackground(bgColorPicker.value);
+      bgCtx=bgCanvas.getContext('2d'); updateBackground(bgColorPicker.value);
     }
     function updateBackground(color) {
-      bgCtx.fillStyle = color;
-      bgCtx.fillRect(0,0,bgCanvas.width,bgCanvas.height);
-      if (!bgHistory.includes(color)) bgHistory.unshift(color);
-      if (bgHistory.length > 8) bgHistory.pop();
+      bgCtx.fillStyle=color; bgCtx.fillRect(0,0,bgCanvas.width,bgCanvas.height);
+      if(!bgHistory.includes(color)) bgHistory.unshift(color); if(bgHistory.length>8) bgHistory.pop();
     }
 
-    // Create and render layers
+    // Layers
     function createLayer(name) {
-      const w = container.clientWidth * 3;
-      const h = container.clientHeight * 3;
-      const c = document.createElement('canvas'); c.width = w; c.height = h;
-      Object.assign(c.style, { position:'absolute', top:`-${container.clientHeight}px`, left:`-${container.clientWidth}px`, zIndex: layers.length + 1 });
+      const w=container.clientWidth*3, h=container.clientHeight*3;
+      const c=document.createElement('canvas'); c.width=w; c.height=h;
+      Object.assign(c.style,{position:'absolute',top:`-${container.clientHeight}px`,left:`-${container.clientWidth}px`,zIndex:layers.length+1});
       wrapper.appendChild(c);
-      const ctx = c.getContext('2d'); ctx.lineCap='round'; ctx.lineJoin='round';
-      const layer = { canvas: c, ctx, name, visible: true, opacity: 1, history: [], historyIndex: -1 };
-      layers.push(layer);
-      activeLayer = layer;
-      renderLayers();
+      const ctx=c.getContext('2d'); ctx.lineCap='round'; ctx.lineJoin='round';
+      const layer={canvas:c,ctx,name,visible:true,opacity:1,history:[],historyIndex:-1};
+      layers.push(layer); activeLayer=layer; renderLayers();
     }
-    function renderLayers() {
-      const div = document.getElementById('layers'); div.innerHTML = '';
-      layers.slice().reverse().forEach(layer => {
-        const item = document.createElement('div'); item.className = 'layer-item';
-        const chk = document.createElement('input'); chk.type='checkbox'; chk.checked=layer.visible;
-        chk.onchange = () => { layer.visible = chk.checked; layer.canvas.style.display = layer.visible ? 'block' : 'none'; };
-        item.appendChild(chk);
-        const lbl = document.createElement('span'); lbl.textContent = layer.name;
-        lbl.onclick = () => activeLayer = layer;
-        item.appendChild(lbl);
-        const del = document.createElement('button'); del.textContent = '✕';
-        del.onclick = () => {
-          const i = layers.indexOf(layer);
-          if (i > -1) { wrapper.removeChild(layer.canvas); layers.splice(i,1); renderLayers(); activeLayer = layers[layers.length - 1] || null; }
-        };
-        item.appendChild(del);
+    function renderLayers(){ const div=document.getElementById('layers'); div.innerHTML=''; layers.slice().reverse().forEach(layer=>{
+        const item=document.createElement('div'); item.className='layer-item';
+        const chk=document.createElement('input'); chk.type='checkbox'; chk.checked=layer.visible;
+        chk.onchange=()=>{layer.visible=chk.checked;layer.canvas.style.display=layer.visible?'block':'none';}; item.appendChild(chk);
+        const lbl=document.createElement('span'); lbl.textContent=layer.name; lbl.onclick=()=>activeLayer=layer; item.appendChild(lbl);
+        const del=document.createElement('button'); del.textContent='✕'; del.onclick=()=>{const i=layers.indexOf(layer); if(i>-1){wrapper.removeChild(layer.canvas);layers.splice(i,1);renderLayers();activeLayer=layers[layers.length-1]||null;}}; item.appendChild(del);
         div.appendChild(item);
-      });
-    }
-
-    addLayerBtn.onclick = () => createLayer('cam ' + (layers.length + 1));
+    });}
+    addLayerBtn.onclick=()=>createLayer('cam '+(layers.length+1));
 
     // Pointer utilities
-    function getPointerPos(e) {
-      const rect = container.getBoundingClientRect();
-      return {
-        x: e.clientX - rect.left - panX + container.clientWidth,
-        y: e.clientY - rect.top - panY + container.clientHeight,
-        pressure: e.pressure || 1
-      };
-    }
+    function getPointerPos(e){ const rect=container.getBoundingClientRect(); return{x:e.clientX-rect.left-panX+container.clientWidth,y:e.clientY-rect.top-panY+container.clientHeight,pressure:e.pressure||1}; }
 
-    // Save for undo
-    function saveHistory() {
-      if (!activeLayer) return;
-      const img = activeLayer.ctx.getImageData(0,0,activeLayer.canvas.width,activeLayer.canvas.height);
-      activeLayer.history.splice(activeLayer.historyIndex+1);
-      activeLayer.history.push(img);
-      activeLayer.historyIndex++;
-      if (activeLayer.history.length > 50) { activeLayer.history.shift(); activeLayer.historyIndex--; }
-    }
-    function undo() {
-      if (!activeLayer) return;
-      if (activeLayer.historyIndex > 0) {
-        activeLayer.historyIndex--;
-        activeLayer.ctx.putImageData(activeLayer.history[activeLayer.historyIndex], 0, 0);
-      } else if (activeLayer.historyIndex === 0) {
-        activeLayer.historyIndex--;
-        activeLayer.ctx.clearRect(0,0,activeLayer.canvas.width,activeLayer.canvas.height);
-      }
-    }
+    // Undo/Redo
+    function saveHistory(){ if(!activeLayer) return; const img=activeLayer.ctx.getImageData(0,0,activeLayer.canvas.width,activeLayer.canvas.height); activeLayer.history.splice(activeLayer.historyIndex+1); activeLayer.history.push(img); activeLayer.historyIndex++; if(activeLayer.history.length>50){activeLayer.history.shift();activeLayer.historyIndex--;}};
+    function undo(){ if(!activeLayer) return; if(activeLayer.historyIndex>0){activeLayer.historyIndex--;activeLayer.ctx.putImageData(activeLayer.history[activeLayer.historyIndex],0,0);}else if(activeLayer.historyIndex===0){activeLayer.historyIndex--;activeLayer.ctx.clearRect(0,0,activeLayer.canvas.width,activeLayer.canvas.height);} };
+    function redo(){ if(!activeLayer) return; if(activeLayer.historyIndex<activeLayer.history.length-1){activeLayer.historyIndex++;activeLayer.ctx.putImageData(activeLayer.history[activeLayer.historyIndex],0,0);} };
 
-    // Mirror drawing
-    function mirrorHorizontal() {
-      layers.forEach(layer => {
-        if (!layer.visible) return;
-        const { ctx, canvas } = layer;
-        const temp = document.createElement('canvas'); temp.width=canvas.width; temp.height=canvas.height;
-        temp.getContext('2d').drawImage(canvas,0,0);
-        const prev = ctx.globalAlpha;
-        ctx.globalAlpha=1; ctx.clearRect(0,0,canvas.width,canvas.height);
-        ctx.save(); ctx.scale(-1,1); ctx.drawImage(temp,-canvas.width,0); ctx.restore();
-        ctx.globalAlpha=prev;
-      });
-    }
+    // Mirror
+    function mirrorHorizontal(){ layers.forEach(layer=>{if(!layer.visible)return; const{ctx,canvas}=layer;const temp=document.createElement('canvas');temp.width=canvas.width;temp.height=canvas.height;temp.getContext('2d').drawImage(canvas,0,0);const prev=ctx.globalAlpha;ctx.globalAlpha=1;ctx.clearRect(0,0,canvas.width,canvas.height);ctx.save();ctx.scale(-1,1);ctx.drawImage(temp,-canvas.width,0);ctx.restore();ctx.globalAlpha=prev;}); }
 
-    // Drawing handlers
-    function pointerDown(e) {
-      if (isSpace) { isPanning=true; panStart.x=e.clientX; panStart.y=e.clientY; startPan.x=panX; startPan.y=panY; return; }
-      if (!activeLayer) return;
-      drawing=true; points=[];
-      const p = getPointerPos(e);
-      points.push(p);
-      saveHistory();
-    }
-    function pointerMove(e) {
-      if (isPanning) {
-        panX = startPan.x + (e.clientX - panStart.x);
-        panY = startPan.y + (e.clientY - panStart.y);
-        wrapper.style.transform = `translate(${panX}px,${panY}px)`;
-        return;
-      }
-      if (!drawing || !activeLayer) return;
-      const p = getPointerPos(e);
-      points.push(p);
-      const ctx = activeLayer.ctx;
-      ctx.globalCompositeOperation = (tool==='eraser')?'destination-out':'source-over';
-      ctx.strokeStyle = (tool==='brush')?colorPicker.value:'#000';
-      ctx.globalAlpha = parseFloat(brushOpacityRange.value);
-      ctx.lineWidth = parseFloat(brushSizeRange.value)*p.pressure;
-      ctx.setLineDash([]);
-      if (points.length>=3) {
-        const p0=points[points.length-3], p1=points[points.length-2], p2=points[points.length-1];
-        const cx=(p0.x+p1.x)/2, cy=(p0.y+p1.y)/2;
-        const nx=(p1.x+p2.x)/2, ny=(p1.y+p2.y)/2;
-        ctx.beginPath(); ctx.moveTo(cx,cy);
-        ctx.quadraticCurveTo(p1.x,p1.y,nx,ny);
-        ctx.stroke();
-      }
-    }
-    function pointerUp() { drawing=false; points=[]; }
+    // Draw handlers
+    function pointerDown(e){ if(isSpace){isPanning=true;panStart.x=e.clientX;panStart.y=e.clientY;startPan.x=panX;startPan.y=panY;return;}if(!activeLayer)return;drawing=true;points=[];const p=getPointerPos(e);points.push(p);saveHistory(); }
+    function pointerMove(e){ if(isPanning){panX=startPan.x+(e.clientX-panStart.x);panY=startPan.y+(e.clientY-panStart.y);wrapper.style.transform=`translate(${panX}px,${panY}px)`;return;}if(!drawing||!activeLayer) return;const p=getPointerPos(e);points.push(p);const ctx=activeLayer.ctx;ctx.globalCompositeOperation=(tool==='eraser')?'destination-out':'source-over';ctx.strokeStyle=colorPicker.value;ctx.globalAlpha=parseFloat(brushOpacityRange.value);ctx.lineWidth=parseFloat(brushSizeRange.value)*p.pressure;ctx.setLineDash([]);if(points.length>=3){const p0=points[points.length-3],p1=points[points.length-2],p2=points[points.length-1];const cx=(p0.x+p1.x)/2,cy=(p0.y+p1.y)/2;const nx=(p1.x+p2.x)/2,ny=(p1.y+p2.y)/2;ctx.beginPath();ctx.moveTo(cx,cy);ctx.quadraticCurveTo(p1.x,p1.y,nx,ny);ctx.stroke();}};
+    function pointerUp(){drawing=false;points=[];}
 
-    // Tool actions
-    toolBrush.onclick = () => { tool='brush'; propBar.style.display='flex'; };
-    toolEraser.onclick = () => { tool='eraser'; propBar.style.display='none'; };
-    toolLayers.onclick = () => layerDrawer.classList.toggle('open');
-    shortcutHelp.onclick = () => shortcutPanel.classList.toggle('hidden');
+    // Tools
+    toolBrush.onclick=()=>{tool='brush';propBar.style.display='flex';};toolEraser.onclick=()=>{tool='eraser';propBar.style.display='none';};toolLayers.onclick=()=>layerDrawer.classList.toggle('open');shortcutHelp.onclick=()=>shortcutPanel.classList.toggle('hidden');
 
     // Shortcuts
-    window.addEventListener('keydown', e => {
-      if (e.key==='b'||e.key==='B') toolBrush.click();
-      if (e.key==='e'||e.key==='E') toolEraser.click();
-      if (e.key==='l'||e.key==='L') toolLayers.click();
-      if (e.key==='h'||e.key==='H') shortcutHelp.click();
-      if (e.code==='Space') { e.preventDefault(); isSpace=true; }
-      if (/^[0-9]$/.test(e.key)) brushOpacityRange.value = (e.key==='0'?1:parseInt(e.key)/10);
-      if ((e.ctrlKey||e.metaKey)&&e.key==='z') undo();
-      if ((e.ctrlKey||e.metaKey)&&e.key==='b') mirrorHorizontal();
-    });
-    window.addEventListener('keyup', e => { if (e.code==='Space') { isSpace=false; isPanning=false; } });
+    window.addEventListener('keydown',e=>{if(e.key==='b'||e.key==='B')toolBrush.click();if(e.key==='e'||e.key==='E')toolEraser.click();if(e.key==='l'||e.key==='L')toolLayers.click();if(e.key==='h'||e.key==='H')shortcutHelp.click();if(e.code==='Space'){e.preventDefault();isSpace=true;}if(/^[0-9]$/.test(e.key))brushOpacityRange.value=(e.key==='0'?1:parseInt(e.key)/10);if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo();}if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key==='Z'){e.preventDefault();redo();}if((e.ctrlKey||e.metaKey)&&e.key==='b')mirrorHorizontal();});
+    window.addEventListener('keyup',e=>{if(e.code==='Space'){isSpace=false;isPanning=false;}});
 
-    // Initialization
-    initBackground(); createLayer('cam 1'); propBar.style.display='flex';
-    container.addEventListener('pointerdown', pointerDown);
-    container.addEventListener('pointermove', pointerMove);
-    container.addEventListener('pointerup', pointerUp);
-    container.addEventListener('pointerleave', pointerUp);
-    window.addEventListener('resize', () => { initBackground(); layers.forEach(l=>{}); wrapper.style.transform=`translate(${panX}px,${panY}px)`; });
+    // Pan via wheel
+    container.addEventListener('wheel',e=>{panX+=e.deltaX;panY+=e.deltaY;wrapper.style.transform=`translate(${panX}px,${panY}px)`;e.preventDefault();},{passive:false});
+
+    // Init
+    initBackground();createLayer('cam 1');
+    container.addEventListener('pointerdown',pointerDown);
+    container.addEventListener('pointermove',pointerMove);
+    container.addEventListener('pointerup',pointerUp);
+    container.addEventListener('pointerleave',pointerUp);
+    window.addEventListener('resize',()=>{initBackground();wrapper.style.transform=`translate(${panX}px,${panY}px)`;});
   </script>
 </body>
 </html>
